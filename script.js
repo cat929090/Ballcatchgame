@@ -2,6 +2,7 @@
    - Exposes window.startGame() so the inline start menu can start the game
    - Reads window.__selectedSkin and window.__mode if set by the inline menu
    - Auto-starts if window.__startRequested is true
+   - Improved first-person cursor rendering and refined opponent cursors
 */
 
 const canvas = document.getElementById('game');
@@ -85,23 +86,72 @@ canvas.addEventListener('click', e=>{ if(!gameStarted || !ball) return; if(ball.
 function hotseatControls(dt){ const p=players[1]; if(!p) return; const speed=380; if(keys['KeyW']) p.y-=speed*dt; if(keys['KeyS']) p.y+=speed*dt; if(keys['KeyA']) p.x-=speed*dt; if(keys['KeyD']) p.x+=speed*dt; p.x=Math.max(20,Math.min(W-20,p.x)); p.y=Math.max(20,Math.min(H-20,p.y)); if(keys['ShiftRight']&&p.hasBall){ if(!p.charging){ p.charging=true; p.chargeStart=now(); } } else if(p.charging){ if(keys['Enter']){ p.charging=false; const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.7*(0.6+t); if(keys['KeyD']) curve=0.7*(0.6+t); spawnBall(1,spd,curve); } if(!keys['ShiftRight']){ const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.6*(0.6+t); if(keys['KeyD']) curve=0.6*(0.6+t); spawnBall(1,spd,curve); p.charging=false; } } if(keys['Space'] && ball && ball.state==='incoming' && ball.target===1){ const d=Math.hypot(ball.x-p.x, ball.y-p.y); if(d<=ball.r+30) catchBall(1); } }
 
 // AI
-function aiUpdate(dt){ const ai=players[1]; if(!ai || ai.isHuman) return; if(ball && ball.state==='incoming' && ball.target===1){ const dx=ball.x-ai.x, dy=ball.y-ai.y, dist=Math.hypot(dx,dy)||1; const moveSpeed=420; ai.x += (dx/dist)*Math.min(moveSpeed*dt, dist); ai.y += (dy/dist)*Math.min(moveSpeed*dt, dist); if(Math.hypot(ball.x-ai.x, ball.y-ai.y) <= ball.r + 18){ catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ const chargeDur = 300 + Math.random()*700; ai.aiState.nextActionAt = now() + 1000 + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const t=Math.min(1, Math.random()*0.95 + 0.1); const spd = MIN_THROW_SPEED + t*(MAX_THROW_SPEED-MIN_THROW_SPEED); const curve=(Math.random()-0.5)*(0.6 + t*1.2); spawnBall(1, spd, curve); }, chargeDur); } } else { const cx=W*0.8, cy=H/2; ai.x += (cx-ai.x)*Math.min(1, dt*1.4); ai.y += (cy-ai.y)*Math.min(1, dt*1.4); } ai.x = Math.max(20, Math.min(W-20, ai.x)); ai.y = Math.max(20, Math.min(H-20, ai.y)); }
+function aiUpdate(dt){ const ai=players[1]; if(!ai || ai.isHuman) return; // difficulty influences reaction & movement speed
+  const diff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium';
+  const diffMap = { 'Easy': 0.6, 'Medium': 1.0, 'Hard': 1.3, 'Expert': 1.6 };
+  const react = diffMap[diff] || 1.0;
+  if(ball && ball.state==='incoming' && ball.target===1){ const dx=ball.x-ai.x, dy=ball.y-ai.y, dist=Math.hypot(dx,dy)||1; const moveSpeed=420 * react; ai.x += (dx/dist)*Math.min(moveSpeed*dt, dist); ai.y += (dy/dist)*Math.min(moveSpeed*dt, dist); if(Math.hypot(ball.x-ai.x, ball.y-ai.y) <= ball.r + 18){ catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ const chargeDur = 300 + Math.random()*700; ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const t=Math.min(1, Math.random()*0.95 + 0.1); const spd = MIN_THROW_SPEED + t*(MAX_THROW_SPEED-MIN_THROW_SPEED); const curve=(Math.random()-0.5)*(0.6 + t*1.2); spawnBall(1, spd*react, curve*react); }, chargeDur/Math.max(0.6,react)); } } else { const cx=W*0.8, cy=H/2; ai.x += (cx-ai.x)*Math.min(1, dt*1.4*react); ai.y += (cy-ai.y)*Math.min(1, dt*1.4*react); } ai.x = Math.max(20, Math.min(W-20, ai.x)); ai.y = Math.max(20, Math.min(H-20, ai.y)); }
 
 function catchBall(playerIdx){ players[playerIdx].hasBall = true; scores[playerIdx] += 1; updateScore(); ball = null; hideCatchButton(); }
 function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
 
 function applyCurve(b, dt){ if(!b || Math.abs(b.curve) < 0.001) return; const speed=Math.hypot(b.vx,b.vy)||1; const nx=b.vx/speed, ny=b.vy/speed; const px=-ny, py=nx; const curveStrength=600; const age=(now()-b.born)/1000; const fade=Math.max(0.2,1-age*0.5); b.vx += px*(b.curve*curveStrength*fade)*dt; b.vy += py*(b.curve*curveStrength*fade)*dt; }
 
-function drawWin98Cursor(x,y,scale, fill, stroke){ const map=['100000000000','110000000000','111000000000','111100000000','111110000000','111111000000','111111100000','111111110000','111111100000','111110010000','111100011000','111000001100','110000000110','100000000011','000000000001','000000000000']; const s=scale; ctx.save(); ctx.imageSmoothingEnabled=false; ctx.fillStyle='rgba(0,0,0,0.22)'; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s + s, y + (row-8)*s + s, s, s); } } ctx.fillStyle = stroke; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s, y + (row-8)*s, s, s); } } ctx.fillStyle = fill; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s + 1, y + (row-8)*s + 1, Math.max(0,s-2), Math.max(0,s-2)); } } ctx.restore(); }
+// Improved cursor drawing (pixel-art Win98 arrow, supports rotation)
+function drawCursorPixel(x,y,scale, fill, stroke, angle=0, shadow=true){
+  const map = [
+    '100000000000','110000000000','111000000000','111100000000','111110000000','111111000000','111111100000',
+    '111111110000','111111100000','111110010000','111100011000','111000001100','110000000110','100000000011',
+    '000000000001','000000000000'
+  ];
+  const s = scale;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.imageSmoothingEnabled = false;
+  if(shadow){ ctx.fillStyle = 'rgba(0,0,0,0.22)'; for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s + s + 1, (r-8)*s + s + 1, s, s); } } }
+  // outline
+  ctx.fillStyle = stroke;
+  for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s, (r-8)*s, s, s); } }
+  // inner
+  ctx.fillStyle = fill;
+  for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s + 1, (r-8)*s + 1, Math.max(0,s-2), Math.max(0,s-2)); } }
+  // small shine highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(2*s, -6*s, Math.max(0,s*0.8), Math.max(0,s*0.9));
+  ctx.restore();
+}
 
-function draw(){ ctx.clearRect(0,0,W,H); // draw opponent
-  const p=players[1]; if(p){ drawWin98Cursor(p.x,p.y,4,p.fill,'#000000'); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.arc(p.x,p.y,32,0,Math.PI*2); ctx.stroke(); if(p.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(p.x+34,p.y-14,10,0,Math.PI*2); ctx.fill(); } }
+function draw(){ ctx.clearRect(0,0,W,H);
+  // subtle background tint (handled by CSS), we draw only gameplay objects
+
+  // opponent (draw slightly smaller and with subtle bob)
+  const p = players[1]; if(p){
+    const bob = Math.sin(now()/400)*2;
+    drawCursorPixel(p.x, p.y + bob, 4, p.fill, '#000000', Math.sin(now()/700)*0.06, true);
+    ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.arc(p.x,p.y,32,0,Math.PI*2); ctx.stroke();
+    if(p.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(p.x+34,p.y-14,10,0,Math.PI*2); ctx.fill(); }
+  }
+
   // ball
   if(ball){ ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.ellipse(ball.x+6, ball.y+8, ball.r*0.9, ball.r*0.45, 0,0,Math.PI*2); ctx.fill(); ctx.fillStyle=currentBallColor; ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.arc(ball.x-4, ball.y-6, ball.r*0.35,0,Math.PI*2); ctx.fill(); }
-  // center cursor
-  const center=players[0]; if(center) drawWin98Cursor(center.x, center.y, 6, center.fill, '#000000');
-  // charge arc
-  if(center && center.charging && center.hasBall){ const dt=Math.min(MAX_CHARGE, now()-center.chargeStart); const t=dt/MAX_CHARGE; const ang=Math.PI*2*t; ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=6; ctx.arc(center.x, center.y, 54, -Math.PI/2, -Math.PI/2 + ang); ctx.stroke(); }
+
+  // center cursor (first-person) - rotate towards recent aim movement to feel like wrist rotation
+  const center = players[0]; if(center){
+    // compute smoothed aim delta to derive rotation
+    const rp = center.recentAims || [];
+    let ang = 0;
+    if(rp.length >= 2){ const first = rp[0], last = rp[rp.length-1]; ang = Math.atan2(last.y - first.y, last.x - first.x); }
+    // make rotation subtle and point roughly toward mouseAim
+    const dx = mouseAim.x - center.x, dy = mouseAim.y - center.y; const targ = Math.atan2(dy,dx);
+    // lerp between targ and ang for smoothness
+    const rtarget = (targ + ang*0.6) / 1.6;
+    // charging bob
+    const bob = (center.charging) ? Math.sin(now()/150)*2 : 0;
+    drawCursorPixel(center.x, center.y + bob, 6, center.fill, '#000000', rtarget, true);
+
+    // charge arc
+    if(center.charging && center.hasBall){ const dt=Math.min(MAX_CHARGE, now()-center.chargeStart); const t=dt/MAX_CHARGE; const arc = Math.PI*2 * t; ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 6; ctx.arc(center.x, center.y + bob, 72, -Math.PI/2, -Math.PI/2 + arc); ctx.stroke(); }
+  }
 }
 
 function showCatchButton(){ if(!('ontouchstart' in window)) return; catchBtn.style.display='block'; }
