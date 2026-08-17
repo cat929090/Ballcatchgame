@@ -1,10 +1,9 @@
-/* gameplay + skins + start menu integration (v8)
-   - Exposes window.startGame() so the inline start menu can start the game
-   - Reads window.__selectedSkin and window.__mode if set by the inline menu
-   - Auto-starts if window.__startRequested is true
-   - Improved first-person cursor rendering and refined opponent cursors
-   - Forces player to stay centered (first-person feel)
-   - Hide self cursor; use ball scaling / reticle for first-person illusion
+/* gameplay + skins + start menu integration (v9)
+   - True first-person 3D-ish throws using simple pinhole projection
+   - Taps/screen aim define the target area (project into world at chosen depth)
+   - Ball has x,y,z and vx,vy,vz; gravity applied to y; projection to 2D for rendering
+   - Player is camera at world origin; opponent lives in world coords in front
+   - Pointer-lock aiming still supported; touch/absolute fallback supported
 */
 
 const canvas = document.getElementById('game');
@@ -26,144 +25,178 @@ const SKINS = [
 let selectedSkin = (typeof window.__selectedSkin === 'number') ? window.__selectedSkin : 0;
 let currentBallColor = SKINS[selectedSkin].ball;
 
-let players = [null, null];
-let ball = null;
+// world / camera parameters
+const FOCAL = 900; // focal length for projection
+const GRAVITY = 2200; // px/s^2 (pulls down on world y)
+
+// gameplay state
+let players = [null, null]; // players[].world = {x,y,z}
+let ball = null; // ball.world {x,y,z} and v{vx,vy,vz}
 let scores = [0,0];
 let gameOver = false;
-let gameStarted = false; // wait for Start
+let gameStarted = false;
 let mode = (typeof window.__mode === 'string') ? window.__mode : 'CPU';
 
-// catch button
-const catchBtn = document.getElementById('catch-btn') || (() => { const b=document.createElement('button'); b.id='catch-btn'; b.textContent='Catch'; b.style.display='none'; document.body.appendChild(b); return b; })();
-catchBtn.addEventListener('click', ()=>{ if (ball && ball.state==='incoming' && ball.target===0) catchBall(0); });
+// aiming state
+let aimAngle = 0; // rotation around Y (radians)
+let usingPointerLock = false;
+const AIM_SENSITIVITY = 0.0028;
+let mouseAbs = {x: W/2, y: H/2};
 
-// input state
-let mouseAim = {x:W/2,y:H/2}, touchActive=false, touchId=null;
-const MAX_CHARGE = 1200, MIN_THROW_SPEED = 420, MAX_THROW_SPEED = 1400; const BALL_RADIUS = 12;
+// UI
+const catchBtn = document.getElementById('catch-btn') || (()=>{const b=document.createElement('button');b.id='catch-btn';b.textContent='Catch';b.style.display='none';document.body.appendChild(b);return b;})();
+catchBtn.addEventListener('click', ()=>{ if(ball && ball.state==='incoming' && ball.target===0) catchBall(0); });
+
+const MAX_CHARGE = 1200, MIN_THROW_SPEED = 420, MAX_THROW_SPEED = 1600; // speeds in px/s
+const BASE_BALL_RADIUS = 12;
 
 const keys = {}; addEventListener('keydown', e=>keys[e.code]=true); addEventListener('keyup', e=>keys[e.code]=false);
-addEventListener('resize', ()=>{ W=canvas.width=innerWidth; H=canvas.height=innerHeight; if(players[0]){players[0].x=W/2;players[0].y=H/2;} });
-
-function now(){return performance.now();}
+addEventListener('resize', ()=>{ W=canvas.width=innerWidth; H=canvas.height=innerHeight; });
+function now(){ return performance.now(); }
 
 function makePlayers(){
-  players[0] = {id:0,x:W*0.5,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:true,charging:false,chargeStart:0,recentAims:[],isHuman:true};
-  players[1] = {id:1,x:W*0.8,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:false,charging:false,chargeStart:0,isHuman:(mode==='Hotseat'),aiState:{nextActionAt:0}};
+  // player is camera at origin (world coords 0,0,0). Player keeps no visible avatar.
+  players[0] = { id:0, world:{x:0,y:0,z:0}, fill:SKINS[selectedSkin].cursor, hasBall:true, charging:false, chargeStart:0, recentAims:[], isHuman:true };
+  // opponent starts a bit to the right and far forward
+  players[1] = { id:1, world:{x:220, y:0, z:900}, fill:SKINS[selectedSkin].cursor, hasBall:false, aiState:{nextActionAt:0}, isHuman:(mode==='Hotseat') };
   updateScore();
 }
 
-function startGame(){
-  // If already started, ignore
-  if (gameStarted) return;
-  // re-read possible selections set by inline menu
-  if (typeof window.__selectedSkin === 'number'){
-    selectedSkin = window.__selectedSkin;
-    currentBallColor = SKINS[selectedSkin].ball;
-  }
-  if (typeof window.__mode === 'string') mode = window.__mode;
+function requestPointerLock(){ try{ if(canvas.requestPointerLock) canvas.requestPointerLock(); }catch(e){} }
 
-  // hide start menu if present
-  const startMenu = document.getElementById('start-menu'); if (startMenu) startMenu.style.display = 'none';
-
-  // keep player centered (first-person feel)
-  if (players[0]){ players[0].x = W/2; players[0].y = H/2; }
-
-  gameStarted = true; resetGame(); lastFrame = now(); requestAnimationFrame(loop);
-}
-
-// expose globally so inline menu can call it
+function startGame(){ if(gameStarted) return; if(typeof window.__selectedSkin==='number'){ selectedSkin=window.__selectedSkin; currentBallColor=SKINS[selectedSkin].ball; } if(typeof window.__mode==='string') mode=window.__mode; const startMenu=document.getElementById('start-menu'); if(startMenu) startMenu.style.display='none'; requestPointerLock(); gameStarted=true; resetGame(); lastFrame=now(); requestAnimationFrame(loop); }
 window.startGame = startGame;
 
-function resetGame(){ makePlayers(); ball = null; scores=[0,0]; updateScore(); gameOver=false; hideCatchButton(); }
+document.addEventListener('pointerlockchange', ()=>{ usingPointerLock = (document.pointerLockElement === canvas); });
 
-function spawnBall(fromIdx, speed, curve){ const from=players[fromIdx]; if(!from) return; let vx=0,vy=0; if(fromIdx===0){ const dx=mouseAim.x-from.x, dy=mouseAim.y-from.y, len=Math.hypot(dx,dy)||1; vx=(dx/len)*speed; vy=(dy/len)*speed; } else { const target=players[0]; const dx=target.x-from.x, dy=target.y-from.y, len=Math.hypot(dx,dy)||1; vx=(dx/len)*speed; vy=(dy/len)*speed; } ball={x:from.x,y:from.y,vx,vy,r:BALL_RADIUS,owner:fromIdx,target:1-fromIdx,state:'outgoing',traveled:0,maxDistance:Math.min(1400,200+speed*0.6),curve:curve||0,born:now()}; from.hasBall=false; hideCatchButton(); }
+function resetGame(){ makePlayers(); ball=null; scores=[0,0]; updateScore(); gameOver=false; hideCatchButton(); }
 
-// input handlers
-canvas.addEventListener('mousemove', e=>{ const r=canvas.getBoundingClientRect(); mouseAim.x=e.clientX-r.left; mouseAim.y=e.clientY-r.top; const ra=players[0] && players[0].recentAims; if(ra){ ra.push({x:mouseAim.x,y:mouseAim.y,t:now()}); if(ra.length>12) ra.shift(); } });
+// Helper: project a world point {x,y,z} (camera at 0,0,0 looking +z) to screen
+function project(world){
+  const cx = W/2, cy = H/2;
+  const z = world.z;
+  if (z <= 10) return null; // behind or too close
+  const sx = cx + (world.x) * (FOCAL / (z + FOCAL));
+  const sy = cy - (world.y) * (FOCAL / (z + FOCAL));
+  const scale = (FOCAL / (z + FOCAL));
+  const r = Math.max(2, BASE_BALL_RADIUS * scale * 1.0);
+  return { x: sx, y: sy, z: z, scale, r };
+}
+
+// spawnBall: from world coords. fromIdx 0 = player (camera); 1 = opponent
+function spawnBall(fromIdx, speed, curve){
+  const from = players[fromIdx]; if(!from) return;
+  if (fromIdx === 0){
+    // compute target world point from current screen tap/aim
+    // choose a target plane distance based on charge / speed
+    const targetPlane = 900; // typical meters forward
+    const cx = W/2, cy = H/2;
+    // convert screen mouseAbs -> world coordinates at depth = targetPlane
+    const sx = mouseAbs.x, sy = mouseAbs.y;
+    const wx = (sx - cx) * ((targetPlane + FOCAL) / FOCAL);
+    const wy = (cy - sy) * ((targetPlane + FOCAL) / FOCAL);
+    const wz = targetPlane;
+
+    // desired target relative to camera origin
+    const tx = wx, ty = wy, tz = wz;
+
+    // choose time based on forward distance and speed
+    const forwardDist = tz;
+    const estForwardSpeed = Math.max(200, speed); // ensure non-zero
+    const t = Math.max(0.25, forwardDist / estForwardSpeed);
+
+    // initial velocities to reach target in time t with gravity
+    const vx = tx / t;
+    const vz = tz / t;
+    // vy must account for gravity: ty = vy*t - 0.5*g*t^2 => vy = (ty + 0.5*g*t^2)/t
+    const vy = (ty + 0.5 * GRAVITY * t * t) / t;
+
+    const startOffset = 24; // start slightly forward
+    const sxw = startOffset * Math.cos(aimAngle);
+    const szy = 0; // start at camera height 0
+    const szw = startOffset * Math.sin(aimAngle);
+    const startWorld = { x: sxw, y: szy, z: startOffset };
+
+    ball = { world:{ x: startWorld.x, y: startWorld.y, z: startWorld.z }, vx, vy, vz, r:BASE_BALL_RADIUS, owner:fromIdx, target:1-fromIdx, state:'outgoing', born:now() };
+  } else {
+    // opponent throw: aim roughly at player with some variation
+    const target = players[0];
+    const tx = target.world.x + (Math.random()-0.5)*80;
+    const ty = 0 + (Math.random()-0.5)*40;
+    const tz = Math.max(300, target.world.z + 10);
+    const estForwardSpeed = Math.max(300, speed);
+    const t = Math.max(0.3, tz / estForwardSpeed);
+    const vx = (tx - from.world.x) / t;
+    const vy = (ty - from.world.y + 0.5 * GRAVITY * t*t) / t;
+    const vz = (tz - from.world.z) / t;
+    ball = { world:{ x: from.world.x, y: from.world.y, z: from.world.z }, vx, vy, vz, r:BASE_BALL_RADIUS, owner:fromIdx, target:1-fromIdx, state:'outgoing', born:now() };
+  }
+  from.hasBall = false; hideCatchButton();
+}
+
+// Input handlers (pointer-lock & fallback)
+canvas.addEventListener('mousemove', e=>{
+  if (usingPointerLock){
+    aimAngle += e.movementX * AIM_SENSITIVITY;
+    // keep angle normalized
+    if (aimAngle > Math.PI*2) aimAngle -= Math.PI*2;
+    if (aimAngle < -Math.PI*2) aimAngle += Math.PI*2;
+  } else {
+    const r = canvas.getBoundingClientRect(); mouseAbs.x = e.clientX - r.left; mouseAbs.y = e.clientY - r.top;
+    // compute aimAngle towards mouseAbs
+    const dx = (mouseAbs.x - W/2), dy = (mouseAbs.y - H/2);
+    aimAngle = Math.atan2(dy, dx);
+  }
+  const ra = players[0] && players[0].recentAims; if(ra){ ra.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(ra.length>12) ra.shift(); }
+});
+
 canvas.addEventListener('mousedown', e=>{ if(!gameStarted||!players[0]||!players[0].hasBall) return; players[0].charging=true; players[0].chargeStart=now(); players[0].recentAims=[]; });
-canvas.addEventListener('mouseup', e=>{ if(!gameStarted||!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt=Math.min(MAX_CHARGE, now()-players[0].chargeStart); const t=dt/MAX_CHARGE; const speed=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; const rp=players[0].recentAims; if(rp.length>=2){ const first=rp[0], last=rp[rp.length-1]; const mvx=last.x-first.x; curve=Math.max(-1,Math.min(1,mvx/200))*(0.8+t*1.2); } spawnBall(0,speed,curve); });
+canvas.addEventListener('mouseup', e=>{ if(!gameStarted||!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt = Math.min(MAX_CHARGE, now()-players[0].chargeStart); const t = dt / MAX_CHARGE; const speed = MIN_THROW_SPEED + t*(MAX_THROW_SPEED - MIN_THROW_SPEED); let curve=0; spawnBall(0, speed, curve); });
 
-canvas.addEventListener('touchstart', e=>{ if(!gameStarted) return; e.preventDefault(); const t=e.changedTouches[0]; touchActive=true; touchId=t.identifier; const r=canvas.getBoundingClientRect(); mouseAim.x=t.clientX-r.left; mouseAim.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAim.x,y:mouseAim.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); if(players[0].hasBall){ players[0].charging=true; players[0].chargeStart=now(); } } }, {passive:false});
-canvas.addEventListener('touchmove', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ const r=canvas.getBoundingClientRect(); mouseAim.x=t.clientX-r.left; mouseAim.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAim.x,y:mouseAim.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); } } } }, {passive:false});
-canvas.addEventListener('touchend', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ touchActive=false; touchId=null; if(!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt=Math.min(MAX_CHARGE, now()-players[0].chargeStart); const tt=dt/MAX_CHARGE; const speed=MIN_THROW_SPEED+tt*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; const rp=players[0].recentAims; if(rp.length>=2){ const first=rp[0], last=rp[rp.length-1]; const mvx=last.x-first.x; curve=Math.max(-1,Math.min(1,mvx/200))*(0.8+tt*1.2); } spawnBall(0,speed,curve); } } }, {passive:false});
-canvas.addEventListener('click', e=>{ if(!gameStarted || !ball) return; if(ball.state!=='incoming') return; if(ball.target!==0) return; const d=Math.hypot(ball.x-players[0].x, ball.y-players[0].y); if(d<=ball.r+30) catchBall(0); });
+// touch: set mouseAbs and use as aim on release
+canvas.addEventListener('touchstart', e=>{ if(!gameStarted) return; e.preventDefault(); const t = e.changedTouches[0]; touchActive=true; touchId=t.identifier; const r = canvas.getBoundingClientRect(); mouseAbs.x = t.clientX - r.left; mouseAbs.y = t.clientY - r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); if(players[0].hasBall){ players[0].charging=true; players[0].chargeStart=now(); } } }, {passive:false});
+canvas.addEventListener('touchmove', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ const r=canvas.getBoundingClientRect(); mouseAbs.x = t.clientX - r.left; mouseAbs.y = t.clientY - r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); } } } }, {passive:false});
+canvas.addEventListener('touchend', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ touchActive=false; touchId=null; if(!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt = Math.min(MAX_CHARGE, now()-players[0].chargeStart); const tu = dt / MAX_CHARGE; const speed = MIN_THROW_SPEED + tu*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(0, speed, 0); } } }, {passive:false});
 
-// hotseat controls
-function hotseatControls(dt){ const p=players[1]; if(!p) return; const speed=380; if(keys['KeyW']) p.y-=speed*dt; if(keys['KeyS']) p.y+=speed*dt; if(keys['KeyA']) p.x-=speed*dt; if(keys['KeyD']) p.x+=speed*dt; p.x=Math.max(20,Math.min(W-20,p.x)); p.y=Math.max(20,Math.min(H-20,p.y)); if(keys['ShiftRight']&&p.hasBall){ if(!p.charging){ p.charging=true; p.chargeStart=now(); } } else if(p.charging){ if(keys['Enter']){ p.charging=false; const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.7*(0.6+t); if(keys['KeyD']) curve=0.7*(0.6+t); spawnBall(1,spd,curve); } if(!keys['ShiftRight']){ const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.6*(0.6+t); if(keys['KeyD']) curve=0.6*(0.6+t); spawnBall(1,spd,curve); p.charging=false; } } if(keys['Space'] && ball && ball.state==='incoming' && ball.target===1){ const d=Math.hypot(ball.x-p.x, ball.y-p.y); if(d<=ball.r+30) catchBall(1); } }
+// clicking to catch: check projected position near reticle
+canvas.addEventListener('click', e=>{ if(!gameStarted || !ball) return; if(ball.state!=='incoming') return; if(ball.target!==0) return; const proj = project(ball.world); if(!proj) return; const d = Math.hypot(proj.x - W/2, proj.y - H/2); if(d <= proj.r + 40 && proj.z > 50) catchBall(0); });
 
-// AI
-function aiUpdate(dt){ const ai=players[1]; if(!ai || ai.isHuman) return; // difficulty influences reaction & movement speed
-  const diff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium';
-  const diffMap = { 'Easy': 0.6, 'Medium': 1.0, 'Hard': 1.3, 'Expert': 1.6 };
-  const react = diffMap[diff] || 1.0;
-  if(ball && ball.state==='incoming' && ball.target===1){ const dx=ball.x-ai.x, dy=ball.y-ai.y, dist=Math.hypot(dx,dy)||1; const moveSpeed=420 * react; ai.x += (dx/dist)*Math.min(moveSpeed*dt, dist); ai.y += (dy/dist)*Math.min(moveSpeed*dt, dist); if(Math.hypot(ball.x-ai.x, ball.y-ai.y) <= ball.r + 18){ catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ const chargeDur = 300 + Math.random()*700; ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const t=Math.min(1, Math.random()*0.95 + 0.1); const spd = MIN_THROW_SPEED + t*(MAX_THROW_SPEED-MIN_THROW_SPEED); const curve=(Math.random()-0.5)*(0.6 + t*1.2); spawnBall(1, spd*react, curve*react); }, chargeDur/Math.max(0.6,react)); } } else { const cx=W*0.8, cy=H/2; ai.x += (cx-ai.x)*Math.min(1, dt*1.4*react); ai.y += (cy-ai.y)*Math.min(1, dt*1.4*react); } ai.x = Math.max(20, Math.min(W-20, ai.x)); ai.y = Math.max(20, Math.min(H-20, ai.y)); }
+// hotseat / AI adapted to world coords
+function hotseatControls(dt){ const p = players[1]; if(!p) return; const speed = 420; if(keys['KeyW']) p.world.z -= speed*dt; if(keys['KeyS']) p.world.z += speed*dt; if(keys['KeyA']) p.world.x -= speed*dt; if(keys['KeyD']) p.world.x += speed*dt; p.world.x = Math.max(-W, Math.min(W, p.world.x)); p.world.z = Math.max(50, Math.min(5000, p.world.z)); if(keys['Space'] && ball && ball.state==='incoming' && ball.target===1){ const proj = project(ball.world); if(proj && Math.hypot(proj.x - (W/2 + p.world.x * (FOCAL/(p.world.z+FOCAL))), proj.y - (H/2 - p.world.y * (FOCAL/(p.world.z+FOCAL)))) <= proj.r + 30) catchBall(1); } }
+
+function aiUpdate(dt){ const ai = players[1]; if(!ai || ai.isHuman) return; const diff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium'; const diffMap = { 'Easy':0.6, 'Medium':1.0, 'Hard':1.3, 'Expert':1.6 }; const react = diffMap[diff] || 1.0; // move to preferable home
+  const homeX = 220, homeZ = 900; ai.world.x += (homeX - ai.world.x) * Math.min(1, dt*0.6*react); ai.world.z += (homeZ - ai.world.z) * Math.min(1, dt*0.6*react); ai.world.x = Math.max(-W, Math.min(W, ai.world.x)); ai.world.z = Math.max(80, Math.min(5000, ai.world.z));
+  if(ball && ball.state==='incoming' && ball.target===1){ // move to intercept projected position
+    const proj = project(ball.world); if(proj){ const desiredX = (proj.x - W/2) * ( (ai.world.z + FOCAL) / FOCAL ); // approximate world lateral
+      const dx = desiredX - ai.world.x; const dz = (proj.z || ai.world.z) - ai.world.z; const dist = Math.hypot(dx, dz) || 1; const mv = 420 * react; ai.world.x += (dx/dist) * Math.min(mv*dt, Math.abs(dx)); ai.world.z += (dz/dist) * Math.min(mv*dt, Math.abs(dz)); if(Math.hypot(ball.world.x - ai.world.x, ball.world.y - ai.world.y, ball.world.z - ai.world.z) <= 60) catchBall(1); }
+  } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const speed = MIN_THROW_SPEED + Math.random()*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(1, speed * react, (Math.random()-0.5)*0.6); }, 300 + Math.random()*700); } }
+}
 
 function catchBall(playerIdx){ players[playerIdx].hasBall = true; scores[playerIdx] += 1; updateScore(); ball = null; hideCatchButton(); }
 function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
 
-function applyCurve(b, dt){ if(!b || Math.abs(b.curve) < 0.001) return; const speed=Math.hypot(b.vx,b.vy)||1; const nx=b.vx/speed, ny=b.vy/speed; const px=-ny, py=nx; const curveStrength=600; const age=(now()-b.born)/1000; const fade=Math.max(0.2,1-age*0.5); b.vx += px*(b.curve*curveStrength*fade)*dt; b.vy += py*(b.curve*curveStrength*fade)*dt; }
-
-// Improved cursor drawing (pixel-art Win98 arrow, supports rotation) - OPPONENT / legacy
-function drawCursorPixel(x,y,scale, fill, stroke, angle=0, shadow=true){
-  const map = [
-    '100000000000','110000000000','111000000000','111100000000','111110000000','111111000000','111111100000',
-    '111111110000','111111100000','111110010000','111100011000','111000001100','110000000110','100000000011',
-    '000000000001','000000000000'
-  ];
-  const s = scale;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.imageSmoothingEnabled = false;
-  if(shadow){ ctx.fillStyle = 'rgba(0,0,0,0.22)'; for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s + s + 1, (r-8)*s + s + 1, s, s); } } }
-  // outline
-  ctx.fillStyle = stroke;
-  for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s, (r-8)*s, s, s); } }
-  // inner
-  ctx.fillStyle = fill;
-  for(let r=0;r<map.length;r++){ for(let c=0;c<map[r].length;c++){ if(map[r][c]==='1') ctx.fillRect((c-2)*s + 1, (r-8)*s + 1, Math.max(0,s-2), Math.max(0,s-2)); } }
-  // small shine highlight
-  ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(2*s, -6*s, Math.max(0,s*0.8), Math.max(0,s*0.9));
-  ctx.restore();
+function applyPhysics(dt){ if(!ball) return; // integrate velocities
+  ball.world.x += ball.vx * dt; ball.world.z += ball.vz * dt; ball.world.y += ball.vy * dt; // gravity
+  ball.vy -= GRAVITY * dt;
+  // simple ground collision: if ball below y = -40 (ground plane) treat as owner pickup or bounce
+  if(ball.world.y < -120){ // sank below ground: give to nearest player
+    // give to owner (counts as score)
+    players[ball.owner].hasBall = true; scores[ball.owner] += 1; updateScore(); ball = null; hideCatchButton(); }
 }
 
+// drawing helpers
 function draw(){ ctx.clearRect(0,0,W,H);
-  // subtle background tint (handled by CSS), we draw only gameplay objects
+  // opponent
+  const opp = players[1]; if(opp){ const proj = project(opp.world); if(proj){ // draw opponent as circle
+      ctx.beginPath(); ctx.fillStyle = opp.fill; ctx.arc(proj.x, proj.y, Math.max(6, proj.r*0.9), 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.strokeStyle='rgba(0,0,0,0.45)'; ctx.lineWidth=2; ctx.stroke(); if(opp.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(proj.x + proj.r*1.2, proj.y - proj.r*0.6, Math.max(6, proj.r*0.6), 0, Math.PI*2); ctx.fill(); } } }
 
-  // opponent (draw slightly smaller and with subtle bob)
-  const p = players[1]; if(p){
-    const bob = Math.sin(now()/400)*2;
-    drawCursorPixel(p.x, p.y + bob, 4, p.fill, '#000000', Math.sin(now()/700)*0.06, true);
-    ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.arc(p.x,p.y,32,0,Math.PI*2); ctx.stroke();
-    if(p.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(p.x+34,p.y-14,10,0,Math.PI*2); ctx.fill(); }
-  }
+  // ball
+  if(ball){ const proj = project(ball.world); if(proj){ // shadow
+      ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.36)'; ctx.ellipse(proj.x + 6, proj.y + Math.max(6, proj.r*0.6), proj.r*0.9, proj.r*0.45, 0, 0, Math.PI*2); ctx.fill(); // ball
+      ctx.fillStyle = currentBallColor; ctx.beginPath(); ctx.arc(proj.x, proj.y, proj.r, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.arc(proj.x - Math.max(3, proj.r*0.2), proj.y - Math.max(5, proj.r*0.2), proj.r*0.28, 0, Math.PI*2); ctx.fill(); } }
 
-  // ball with perspective scaling to feel first-person
-  if(ball){
-    // distance from player center to ball
-    const player = players[0] || {x:W/2,y:H/2};
-    const dx = ball.x - player.x;
-    const dy = ball.y - player.y;
-    const dist = Math.hypot(dx, dy);
-    const MAX_PERSPECTIVE_DIST = Math.max(W, H) * 1.2; // beyond this use farScale
-    const farScale = 0.6;
-    const nearScale = 1.8;
-    const t = Math.min(1, dist / MAX_PERSPECTIVE_DIST);
-    const scale = nearScale * (1 - t) + farScale * t; // lerp from near->far
-    const r = Math.max(2, ball.r * scale);
-
-    // shadow / squash depends on scale
-    ctx.beginPath(); ctx.fillStyle = 'rgba(0,0,0,0.36)'; ctx.ellipse(ball.x + 6, ball.y + 10, r * 0.9, r * 0.45, 0, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = currentBallColor; ctx.beginPath(); ctx.arc(ball.x, ball.y, r, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.arc(ball.x - Math.max(3, r*0.2), ball.y - Math.max(5, r*0.2), r * 0.28, 0, Math.PI*2); ctx.fill();
-  }
-
-  // draw a minimal first-person reticle at center (do not draw player cursor)
-  const cx = W/2, cy = H/2;
-  ctx.save();
-  ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 2; ctx.arc(cx, cy, 8, 0, Math.PI*2); ctx.stroke();
-  ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.arc(cx, cy, 2, 0, Math.PI*2); ctx.fill();
-  ctx.restore();
+  // reticle
+  const cx = W/2, cy = H/2; ctx.save(); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=2; ctx.arc(cx, cy, 8, 0, Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.arc(cx, cy, 2, 0, Math.PI*2); ctx.fill(); ctx.restore();
 }
 
 function showCatchButton(){ if(!('ontouchstart' in window)) return; catchBtn.style.display='block'; }
@@ -171,13 +204,18 @@ function hideCatchButton(){ catchBtn.style.display='none'; }
 function isTouchDevice(){ return 'ontouchstart' in window || navigator.maxTouchPoints>0; }
 
 let lastFrame = now();
-function loop(){ const t=now(); const dt=Math.min(40, t-lastFrame)/1000; lastFrame=t; if(!gameStarted) return; if(players[0]){ players[0].x = W/2; players[0].y = H/2; } if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt); if(ball){ if(ball.state==='outgoing'){ applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; ball.traveled += Math.hypot(ball.vx*dt, ball.vy*dt); const target=players[ball.target]; const d=Math.hypot(ball.x-target.x, ball.y-target.y); if(d<=120 || ball.traveled>=ball.maxDistance){ ball.state='incoming'; if(ball.target===0 && isTouchDevice()) showCatchButton(); } } else if(ball.state==='incoming'){ const target=players[ball.target]; const dx=target.x-ball.x, dy=target.y-ball.y, dist=Math.hypot(dx,dy)||1; const steer=200; ball.vx += (dx/dist)*steer*dt; ball.vy += (dy/dist)*steer*dt; applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; if(dist <= ball.r + 8){ scores[ball.owner] += 1; players[ball.owner].hasBall = true; updateScore(); ball = null; hideCatchButton(); } } }
-  draw(); if(!gameOver) requestAnimationFrame(loop); }
-
-function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
+function loop(){ const t = now(); const dt = Math.min(40, t - lastFrame) / 1000; lastFrame = t; if(!gameStarted) return; // keep player at camera (world origin)
+  players[0].world.x = 0; players[0].world.y = 0; players[0].world.z = 0;
+  if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt);
+  if(ball){ applyPhysics(dt);
+    // check for incoming-to-player catch: project and see if near center and depth reasonable
+    if(ball.state === 'outgoing'){ // when z passes beyond target plane, switch to incoming state to let target home
+      // if owner threw, we let incoming be determined when ball's forward velocity reverses or other logic
+      // For simplicity: mark incoming when ball's vz changes sign relative to target
+    }
+  }
+  draw(); if(!gameOver) requestAnimationFrame(loop);
+}
 
 // init
-makePlayers();
-
-// auto-start if requested by inline menu before the script loaded
-if (window.__startRequested){ startGame(); }
+makePlayers(); if(window.__startRequested){ startGame(); }
