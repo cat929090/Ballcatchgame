@@ -5,17 +5,21 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Cursor Throw & Catch</title>
   <link rel="stylesheet" href="style.css" />
+  <!-- Prevent aggressive proxies from caching (helpful on mobile) -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
 </head>
 <body>
   <div id="hud">
     <div id="score">Score: 0</div>
     <div id="lives"></div>
     <div id="instr">Hold/click/touch to charge, release to throw. Catch by tapping/clicking.</div>
-    <div id="version" style="font-weight:800;opacity:0.9;margin-left:8px">v4</div>
+    <div id="version" style="font-weight:900;opacity:0.95;margin-left:8px;color:#9be">v5</div>
   </div>
   <canvas id="game"></canvas>
 
   <!-- cache-bust query so phones pick up latest script after updates -->
-  <script src="script.js?v=4"></script>
+  <script src="script.js?v=5"></script>
 </body>
 </html>
