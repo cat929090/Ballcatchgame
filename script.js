@@ -1,4 +1,8 @@
-/* gameplay + skins + start menu integration (v8) */
+/* gameplay + skins + start menu integration (v8)
+   - Exposes window.startGame() so the inline start menu can start the game
+   - Reads window.__selectedSkin and window.__mode if set by the inline menu
+   - Auto-starts if window.__startRequested is true
+*/
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -16,7 +20,7 @@ const SKINS = [
   {name:'Lime', cursor:'#b8ff6a', ball:'#ffb86a'},
   {name:'Gold', cursor:'#ffd36a', ball:'#9b6aff'}
 ];
-let selectedSkin = 0; // index
+let selectedSkin = (typeof window.__selectedSkin === 'number') ? window.__selectedSkin : 0;
 let currentBallColor = SKINS[selectedSkin].ball;
 
 let players = [null, null];
@@ -24,33 +28,11 @@ let ball = null;
 let scores = [0,0];
 let gameOver = false;
 let gameStarted = false; // wait for Start
-
-// UI elements
-const startMenu = document.getElementById('start-menu');
-const playBtn = document.getElementById('play-btn');
-const cpuBtn = document.getElementById('cpu-btn');
-const skinButtons = Array.from(document.querySelectorAll('.skin-swatch'));
+let mode = (typeof window.__mode === 'string') ? window.__mode : 'CPU';
 
 // catch button
 const catchBtn = document.getElementById('catch-btn') || (() => { const b=document.createElement('button'); b.id='catch-btn'; b.textContent='Catch'; b.style.display='none'; document.body.appendChild(b); return b; })();
 catchBtn.addEventListener('click', ()=>{ if (ball && ball.state==='incoming' && ball.target===0) catchBall(0); });
-
-// wiring skin buttons
-skinButtons.forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    const idx = Number(btn.dataset.index);
-    selectSkin(idx);
-  });
-});
-
-function selectSkin(idx){ selectedSkin = idx; currentBallColor = SKINS[selectedSkin].ball; skinButtons.forEach(b=>b.classList.remove('selected')); skinButtons[selectedSkin].classList.add('selected');
-  if (players[0]) players[0].fill = SKINS[selectedSkin].cursor; if (players[1]) players[1].fill = SKINS[selectedSkin].cursor; updateScore(); }
-
-// default select
-selectSkin(0);
-
-playBtn.addEventListener('click', ()=>{ mode='CPU'; startGame(); });
-cpuBtn.addEventListener('click', ()=>{ mode = (mode==='CPU')? 'Hotseat' : 'CPU'; cpuBtn.textContent = mode==='CPU' ? 'CPU Mode' : 'Hotseat Mode'; });
 
 // input state
 let mouseAim = {x:W/2,y:H/2}, touchActive=false, touchId=null;
@@ -61,11 +43,31 @@ addEventListener('resize', ()=>{ W=canvas.width=innerWidth; H=canvas.height=inne
 
 function now(){return performance.now();}
 
-function makePlayers(){ players[0] = {id:0,x:W*0.5,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:true,charging:false,chargeStart:0,recentAims:[],isHuman:true}; players[1]={id:1,x:W*0.8,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:false,charging:false,chargeStart:0,isHuman:(mode==='Hotseat'),aiState:{nextActionAt:0}}; updateScore(); }
+function makePlayers(){
+  players[0] = {id:0,x:W*0.5,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:true,charging:false,chargeStart:0,recentAims:[],isHuman:true};
+  players[1] = {id:1,x:W*0.8,y:H*0.5,fill:SKINS[selectedSkin].cursor,hasBall:false,charging:false,chargeStart:0,isHuman:(mode==='Hotseat'),aiState:{nextActionAt:0}};
+  updateScore();
+}
 
-function startGame(){ startMenu.style.display='none'; gameStarted=true; resetGame(); lastFrame=now(); requestAnimationFrame(loop); }
+function startGame(){
+  // If already started, ignore
+  if (gameStarted) return;
+  // re-read possible selections set by inline menu
+  if (typeof window.__selectedSkin === 'number'){
+    selectedSkin = window.__selectedSkin;
+    currentBallColor = SKINS[selectedSkin].ball;
+  }
+  if (typeof window.__mode === 'string') mode = window.__mode;
 
-function resetGame(){ makePlayers(); ball=null; scores=[0,0]; updateScore(); gameOver=false; hideCatchButton(); }
+  // hide start menu if present
+  const startMenu = document.getElementById('start-menu'); if (startMenu) startMenu.style.display = 'none';
+  gameStarted = true; resetGame(); lastFrame = now(); requestAnimationFrame(loop);
+}
+
+// expose globally so inline menu can call it
+window.startGame = startGame;
+
+function resetGame(){ makePlayers(); ball = null; scores=[0,0]; updateScore(); gameOver=false; hideCatchButton(); }
 
 function spawnBall(fromIdx, speed, curve){ const from=players[fromIdx]; if(!from) return; let vx=0,vy=0; if(fromIdx===0){ const dx=mouseAim.x-from.x, dy=mouseAim.y-from.y, len=Math.hypot(dx,dy)||1; vx=(dx/len)*speed; vy=(dy/len)*speed; } else { const target=players[0]; const dx=target.x-from.x, dy=target.y-from.y, len=Math.hypot(dx,dy)||1; vx=(dx/len)*speed; vy=(dy/len)*speed; } ball={x:from.x,y:from.y,vx,vy,r:BALL_RADIUS,owner:fromIdx,target:1-fromIdx,state:'outgoing',traveled:0,maxDistance:Math.min(1400,200+speed*0.6),curve:curve||0,born:now()}; from.hasBall=false; hideCatchButton(); }
 
@@ -77,8 +79,43 @@ canvas.addEventListener('mouseup', e=>{ if(!gameStarted||!players[0]||!players[0
 canvas.addEventListener('touchstart', e=>{ if(!gameStarted) return; e.preventDefault(); const t=e.changedTouches[0]; touchActive=true; touchId=t.identifier; const r=canvas.getBoundingClientRect(); mouseAim.x=t.clientX-r.left; mouseAim.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAim.x,y:mouseAim.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); if(players[0].hasBall){ players[0].charging=true; players[0].chargeStart=now(); } } }, {passive:false});
 canvas.addEventListener('touchmove', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ const r=canvas.getBoundingClientRect(); mouseAim.x=t.clientX-r.left; mouseAim.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAim.x,y:mouseAim.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); } } } }, {passive:false});
 canvas.addEventListener('touchend', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ touchActive=false; touchId=null; if(!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt=Math.min(MAX_CHARGE, now()-players[0].chargeStart); const tt=dt/MAX_CHARGE; const speed=MIN_THROW_SPEED+tt*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; const rp=players[0].recentAims; if(rp.length>=2){ const first=rp[0], last=rp[rp.length-1]; const mvx=last.x-first.x; curve=Math.max(-1,Math.min(1,mvx/200))*(0.8+tt*1.2); } spawnBall(0,speed,curve); } } }, {passive:false});
-
 canvas.addEventListener('click', e=>{ if(!gameStarted || !ball) return; if(ball.state!=='incoming') return; if(ball.target!==0) return; const d=Math.hypot(ball.x-players[0].x, ball.y-players[0].y); if(d<=ball.r+30) catchBall(0); });
 
 // hotseat controls
-function hotseatControls(dt){ const p=players[1]; if(!p) return; const speed=380; if(keys['KeyW']) p.y-=speed*dt; if(keys['KeyS']) p.y+=speed*dt; if(keys['KeyA']) p.x-=speed*dt; if(keys['KeyD']) p.x+=speed*dt; p.x=Math.max(20,Math.min(W-20,p.x)); p.y=Math.max(20,Math.min(H-20,p.y)); if(keys['ShiftRight']&&p.hasBall){ if(!p.charging){ p.charging=true; p.chargeStart=now(); } } else if(p.charging){ if(keys['Enter']){ p.charging=false; const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_REQUIREMENTS exceeded
+function hotseatControls(dt){ const p=players[1]; if(!p) return; const speed=380; if(keys['KeyW']) p.y-=speed*dt; if(keys['KeyS']) p.y+=speed*dt; if(keys['KeyA']) p.x-=speed*dt; if(keys['KeyD']) p.x+=speed*dt; p.x=Math.max(20,Math.min(W-20,p.x)); p.y=Math.max(20,Math.min(H-20,p.y)); if(keys['ShiftRight']&&p.hasBall){ if(!p.charging){ p.charging=true; p.chargeStart=now(); } } else if(p.charging){ if(keys['Enter']){ p.charging=false; const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.7*(0.6+t); if(keys['KeyD']) curve=0.7*(0.6+t); spawnBall(1,spd,curve); } if(!keys['ShiftRight']){ const dtc=Math.min(MAX_CHARGE, now()-p.chargeStart); const t=dtc/MAX_CHARGE; const spd=MIN_THROW_SPEED+t*(MAX_THROW_SPEED-MIN_THROW_SPEED); let curve=0; if(keys['KeyA']) curve=-0.6*(0.6+t); if(keys['KeyD']) curve=0.6*(0.6+t); spawnBall(1,spd,curve); p.charging=false; } } if(keys['Space'] && ball && ball.state==='incoming' && ball.target===1){ const d=Math.hypot(ball.x-p.x, ball.y-p.y); if(d<=ball.r+30) catchBall(1); } }
+
+// AI
+function aiUpdate(dt){ const ai=players[1]; if(!ai || ai.isHuman) return; if(ball && ball.state==='incoming' && ball.target===1){ const dx=ball.x-ai.x, dy=ball.y-ai.y, dist=Math.hypot(dx,dy)||1; const moveSpeed=420; ai.x += (dx/dist)*Math.min(moveSpeed*dt, dist); ai.y += (dy/dist)*Math.min(moveSpeed*dt, dist); if(Math.hypot(ball.x-ai.x, ball.y-ai.y) <= ball.r + 18){ catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ const chargeDur = 300 + Math.random()*700; ai.aiState.nextActionAt = now() + 1000 + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const t=Math.min(1, Math.random()*0.95 + 0.1); const spd = MIN_THROW_SPEED + t*(MAX_THROW_SPEED-MIN_THROW_SPEED); const curve=(Math.random()-0.5)*(0.6 + t*1.2); spawnBall(1, spd, curve); }, chargeDur); } } else { const cx=W*0.8, cy=H/2; ai.x += (cx-ai.x)*Math.min(1, dt*1.4); ai.y += (cy-ai.y)*Math.min(1, dt*1.4); } ai.x = Math.max(20, Math.min(W-20, ai.x)); ai.y = Math.max(20, Math.min(H-20, ai.y)); }
+
+function catchBall(playerIdx){ players[playerIdx].hasBall = true; scores[playerIdx] += 1; updateScore(); ball = null; hideCatchButton(); }
+function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
+
+function applyCurve(b, dt){ if(!b || Math.abs(b.curve) < 0.001) return; const speed=Math.hypot(b.vx,b.vy)||1; const nx=b.vx/speed, ny=b.vy/speed; const px=-ny, py=nx; const curveStrength=600; const age=(now()-b.born)/1000; const fade=Math.max(0.2,1-age*0.5); b.vx += px*(b.curve*curveStrength*fade)*dt; b.vy += py*(b.curve*curveStrength*fade)*dt; }
+
+function drawWin98Cursor(x,y,scale, fill, stroke){ const map=['100000000000','110000000000','111000000000','111100000000','111110000000','111111000000','111111100000','111111110000','111111100000','111110010000','111100011000','111000001100','110000000110','100000000011','000000000001','000000000000']; const s=scale; ctx.save(); ctx.imageSmoothingEnabled=false; ctx.fillStyle='rgba(0,0,0,0.22)'; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s + s, y + (row-8)*s + s, s, s); } } ctx.fillStyle = stroke; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s, y + (row-8)*s, s, s); } } ctx.fillStyle = fill; for(let row=0;row<map.length;row++){ for(let col=0;col<map[row].length;col++){ if(map[row][col]==='1') ctx.fillRect(x + (col-2)*s + 1, y + (row-8)*s + 1, Math.max(0,s-2), Math.max(0,s-2)); } } ctx.restore(); }
+
+function draw(){ ctx.clearRect(0,0,W,H); // draw opponent
+  const p=players[1]; if(p){ drawWin98Cursor(p.x,p.y,4,p.fill,'#000000'); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.arc(p.x,p.y,32,0,Math.PI*2); ctx.stroke(); if(p.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(p.x+34,p.y-14,10,0,Math.PI*2); ctx.fill(); } }
+  // ball
+  if(ball){ ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.ellipse(ball.x+6, ball.y+8, ball.r*0.9, ball.r*0.45, 0,0,Math.PI*2); ctx.fill(); ctx.fillStyle=currentBallColor; ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.arc(ball.x-4, ball.y-6, ball.r*0.35,0,Math.PI*2); ctx.fill(); }
+  // center cursor
+  const center=players[0]; if(center) drawWin98Cursor(center.x, center.y, 6, center.fill, '#000000');
+  // charge arc
+  if(center && center.charging && center.hasBall){ const dt=Math.min(MAX_CHARGE, now()-center.chargeStart); const t=dt/MAX_CHARGE; const ang=Math.PI*2*t; ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=6; ctx.arc(center.x, center.y, 54, -Math.PI/2, -Math.PI/2 + ang); ctx.stroke(); }
+}
+
+function showCatchButton(){ if(!('ontouchstart' in window)) return; catchBtn.style.display='block'; }
+function hideCatchButton(){ catchBtn.style.display='none'; }
+function isTouchDevice(){ return 'ontouchstart' in window || navigator.maxTouchPoints>0; }
+
+let lastFrame = now();
+function loop(){ const t=now(); const dt=Math.min(40, t-lastFrame)/1000; lastFrame=t; if(!gameStarted) return; if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt); if(ball){ if(ball.state==='outgoing'){ applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; ball.traveled += Math.hypot(ball.vx*dt, ball.vy*dt); const target=players[ball.target]; const d=Math.hypot(ball.x-target.x, ball.y-target.y); if(d<=120 || ball.traveled>=ball.maxDistance){ ball.state='incoming'; if(ball.target===0 && isTouchDevice()) showCatchButton(); } } else if(ball.state==='incoming'){ const target=players[ball.target]; const dx=target.x-ball.x, dy=target.y-ball.y, dist=Math.hypot(dx,dy)||1; const steer=200; ball.vx += (dx/dist)*steer*dt; ball.vy += (dy/dist)*steer*dt; applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; if(dist <= ball.r + 8){ scores[ball.owner] += 1; players[ball.owner].hasBall = true; updateScore(); ball = null; hideCatchButton(); } } }
+  draw(); if(!gameOver) requestAnimationFrame(loop); }
+
+function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
+
+// init
+makePlayers();
+
+// auto-start if requested by inline menu before the script loaded
+if (window.__startRequested){ startGame(); }
