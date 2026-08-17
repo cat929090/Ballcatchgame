@@ -1,0 +1,39 @@
+:root{
+  --bg:#0b1220;
+  --panel: rgba(255,255,255,0.06);
+  --accent: #58b6ff;
+  --text:#e6eef6;
+}
+
+html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;}
+body{background:linear-gradient(180deg,#07101a 0%, #05121a 100%); color:var(--text); overflow:hidden;}
+#hud{
+  position:fixed; left:12px; top:12px; z-index:10;
+  display:flex; gap:12px; align-items:center; backdrop-filter: blur(6px);
+  padding:8px 12px; border-radius:10px; background:var(--panel); color:var(--text);
+  box-shadow: 0 6px 20px rgba(2,6,23,0.6);
+}
+#instr{font-size:13px; opacity:0.95; color:#bcd6ee}
+#score,#lives{font-weight:700}
+canvas{display:block; width:100vw; height:100vh;}
+.mode-select{margin-left:6px; background:transparent; color:var(--text); border:1px solid rgba(255,255,255,0.06); padding:6px; border-radius:6px}
+
+/* power indicator near cursor */
+.power-hud{
+  position:fixed; pointer-events:none; z-index:11; transform:translate(-50%,-150%);
+  font-size:12px; color:var(--text);
+}
+.power-bar{
+  width:120px; height:10px; background:rgba(255,255,255,0.08); border-radius:6px; overflow:hidden;
+  margin-top:6px;
+}
+.power-fill{height:100%; width:0%; background:linear-gradient(90deg,var(--accent),#8cf6ff); border-radius:6px;}
+.game-over{
+  position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:20;
+  background:rgba(0,0,0,0.6); color:var(--text); padding:24px; border-radius:12px; text-align:center;
+  backdrop-filter: blur(6px);
+}
+button#restart{margin-top:10px; padding:8px 12px; border-radius:8px; background:var(--accent); color:#022; border:0; cursor:pointer; font-weight:700;}
+
+.info-panel{position:fixed; right:12px; top:12px; z-index:10; background:var(--panel); padding:8px 12px; border-radius:10px; font-size:13px}
+.instructions{max-width:320px}
