@@ -3,6 +3,8 @@
    - Reads window.__selectedSkin and window.__mode if set by the inline menu
    - Auto-starts if window.__startRequested is true
    - Improved first-person cursor rendering and refined opponent cursors
+   - Forces player to stay centered (first-person feel)
+   - Hide self cursor; use ball scaling / reticle for first-person illusion
 */
 
 const canvas = document.getElementById('game');
@@ -62,6 +64,10 @@ function startGame(){
 
   // hide start menu if present
   const startMenu = document.getElementById('start-menu'); if (startMenu) startMenu.style.display = 'none';
+
+  // keep player centered (first-person feel)
+  if (players[0]){ players[0].x = W/2; players[0].y = H/2; }
+
   gameStarted = true; resetGame(); lastFrame = now(); requestAnimationFrame(loop);
 }
 
@@ -97,7 +103,7 @@ function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} -
 
 function applyCurve(b, dt){ if(!b || Math.abs(b.curve) < 0.001) return; const speed=Math.hypot(b.vx,b.vy)||1; const nx=b.vx/speed, ny=b.vy/speed; const px=-ny, py=nx; const curveStrength=600; const age=(now()-b.born)/1000; const fade=Math.max(0.2,1-age*0.5); b.vx += px*(b.curve*curveStrength*fade)*dt; b.vy += py*(b.curve*curveStrength*fade)*dt; }
 
-// Improved cursor drawing (pixel-art Win98 arrow, supports rotation)
+// Improved cursor drawing (pixel-art Win98 arrow, supports rotation) - OPPONENT / legacy
 function drawCursorPixel(x,y,scale, fill, stroke, angle=0, shadow=true){
   const map = [
     '100000000000','110000000000','111000000000','111100000000','111110000000','111111000000','111111100000',
@@ -132,26 +138,32 @@ function draw(){ ctx.clearRect(0,0,W,H);
     if(p.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(p.x+34,p.y-14,10,0,Math.PI*2); ctx.fill(); }
   }
 
-  // ball
-  if(ball){ ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.ellipse(ball.x+6, ball.y+8, ball.r*0.9, ball.r*0.45, 0,0,Math.PI*2); ctx.fill(); ctx.fillStyle=currentBallColor; ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.22)'; ctx.arc(ball.x-4, ball.y-6, ball.r*0.35,0,Math.PI*2); ctx.fill(); }
+  // ball with perspective scaling to feel first-person
+  if(ball){
+    // distance from player center to ball
+    const player = players[0] || {x:W/2,y:H/2};
+    const dx = ball.x - player.x;
+    const dy = ball.y - player.y;
+    const dist = Math.hypot(dx, dy);
+    const MAX_PERSPECTIVE_DIST = Math.max(W, H) * 1.2; // beyond this use farScale
+    const farScale = 0.6;
+    const nearScale = 1.8;
+    const t = Math.min(1, dist / MAX_PERSPECTIVE_DIST);
+    const scale = nearScale * (1 - t) + farScale * t; // lerp from near->far
+    const r = Math.max(2, ball.r * scale);
 
-  // center cursor (first-person) - rotate towards recent aim movement to feel like wrist rotation
-  const center = players[0]; if(center){
-    // compute smoothed aim delta to derive rotation
-    const rp = center.recentAims || [];
-    let ang = 0;
-    if(rp.length >= 2){ const first = rp[0], last = rp[rp.length-1]; ang = Math.atan2(last.y - first.y, last.x - first.x); }
-    // make rotation subtle and point roughly toward mouseAim
-    const dx = mouseAim.x - center.x, dy = mouseAim.y - center.y; const targ = Math.atan2(dy,dx);
-    // lerp between targ and ang for smoothness
-    const rtarget = (targ + ang*0.6) / 1.6;
-    // charging bob
-    const bob = (center.charging) ? Math.sin(now()/150)*2 : 0;
-    drawCursorPixel(center.x, center.y + bob, 6, center.fill, '#000000', rtarget, true);
-
-    // charge arc
-    if(center.charging && center.hasBall){ const dt=Math.min(MAX_CHARGE, now()-center.chargeStart); const t=dt/MAX_CHARGE; const arc = Math.PI*2 * t; ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 6; ctx.arc(center.x, center.y + bob, 72, -Math.PI/2, -Math.PI/2 + arc); ctx.stroke(); }
+    // shadow / squash depends on scale
+    ctx.beginPath(); ctx.fillStyle = 'rgba(0,0,0,0.36)'; ctx.ellipse(ball.x + 6, ball.y + 10, r * 0.9, r * 0.45, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = currentBallColor; ctx.beginPath(); ctx.arc(ball.x, ball.y, r, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.arc(ball.x - Math.max(3, r*0.2), ball.y - Math.max(5, r*0.2), r * 0.28, 0, Math.PI*2); ctx.fill();
   }
+
+  // draw a minimal first-person reticle at center (do not draw player cursor)
+  const cx = W/2, cy = H/2;
+  ctx.save();
+  ctx.beginPath(); ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 2; ctx.arc(cx, cy, 8, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.arc(cx, cy, 2, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
 }
 
 function showCatchButton(){ if(!('ontouchstart' in window)) return; catchBtn.style.display='block'; }
@@ -159,7 +171,7 @@ function hideCatchButton(){ catchBtn.style.display='none'; }
 function isTouchDevice(){ return 'ontouchstart' in window || navigator.maxTouchPoints>0; }
 
 let lastFrame = now();
-function loop(){ const t=now(); const dt=Math.min(40, t-lastFrame)/1000; lastFrame=t; if(!gameStarted) return; if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt); if(ball){ if(ball.state==='outgoing'){ applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; ball.traveled += Math.hypot(ball.vx*dt, ball.vy*dt); const target=players[ball.target]; const d=Math.hypot(ball.x-target.x, ball.y-target.y); if(d<=120 || ball.traveled>=ball.maxDistance){ ball.state='incoming'; if(ball.target===0 && isTouchDevice()) showCatchButton(); } } else if(ball.state==='incoming'){ const target=players[ball.target]; const dx=target.x-ball.x, dy=target.y-ball.y, dist=Math.hypot(dx,dy)||1; const steer=200; ball.vx += (dx/dist)*steer*dt; ball.vy += (dy/dist)*steer*dt; applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; if(dist <= ball.r + 8){ scores[ball.owner] += 1; players[ball.owner].hasBall = true; updateScore(); ball = null; hideCatchButton(); } } }
+function loop(){ const t=now(); const dt=Math.min(40, t-lastFrame)/1000; lastFrame=t; if(!gameStarted) return; if(players[0]){ players[0].x = W/2; players[0].y = H/2; } if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt); if(ball){ if(ball.state==='outgoing'){ applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; ball.traveled += Math.hypot(ball.vx*dt, ball.vy*dt); const target=players[ball.target]; const d=Math.hypot(ball.x-target.x, ball.y-target.y); if(d<=120 || ball.traveled>=ball.maxDistance){ ball.state='incoming'; if(ball.target===0 && isTouchDevice()) showCatchButton(); } } else if(ball.state==='incoming'){ const target=players[ball.target]; const dx=target.x-ball.x, dy=target.y-ball.y, dist=Math.hypot(dx,dy)||1; const steer=200; ball.vx += (dx/dist)*steer*dt; ball.vy += (dy/dist)*steer*dt; applyCurve(ball, dt); ball.x += ball.vx*dt; ball.y += ball.vy*dt; if(dist <= ball.r + 8){ scores[ball.owner] += 1; players[ball.owner].hasBall = true; updateScore(); ball = null; hideCatchButton(); } } }
   draw(); if(!gameOver) requestAnimationFrame(loop); }
 
 function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
