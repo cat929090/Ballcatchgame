@@ -1,12 +1,14 @@
 :root{
-  --bg:#0b1220;
+  --bg-start:#2b6cff;
+  --bg-end:#1240a3;
   --panel: rgba(255,255,255,0.06);
   --accent: #58b6ff;
   --text:#e6eef6;
 }
 
 html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;}
-body{background:linear-gradient(180deg,#07101a 0%, #05121a 100%); color:var(--text); overflow:hidden;}
+/* blue background */
+body{background:linear-gradient(180deg,var(--bg-start) 0%, var(--bg-end) 100%); color:var(--text); overflow:hidden;}
 #hud{
   position:fixed; left:12px; top:12px; z-index:10;
   display:flex; gap:12px; align-items:center; backdrop-filter: blur(6px);
@@ -37,3 +39,6 @@ button#restart{margin-top:10px; padding:8px 12px; border-radius:8px; background:
 
 .info-panel{position:fixed; right:12px; top:12px; z-index:10; background:var(--panel); padding:8px 12px; border-radius:10px; font-size:13px}
 .instructions{max-width:320px}
+
+/* improve mobile catch button touch behavior */
+#catch-btn { touch-action: manipulation; -webkit-tap-highlight-color: rgba(0,0,0,0); }
