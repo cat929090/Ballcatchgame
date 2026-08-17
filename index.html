@@ -45,9 +45,18 @@
         <div class="label">Gold</div>
       </button>
     </div>
-    <div style="margin-top:14px;display:flex;gap:10px;justify-content:center;">
+
+    <div class="menu-controls" style="margin-top:12px;display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;">
       <button id="play-btn" class="primary">Play</button>
-      <button id="cpu-btn" class="secondary">CPU Mode</button>
+      <button id="hotseat-btn" class="secondary">Hotseat</button>
+      <button id="cpu-btn" class="secondary selected" data-diff="Medium">CPU: Medium</button>
+    </div>
+
+    <div id="cpu-diffs" style="margin-top:12px;display:flex;gap:8px;justify-content:center;">
+      <button class="diff-btn selected" data-diff="Easy">Easy</button>
+      <button class="diff-btn" data-diff="Medium">Medium</button>
+      <button class="diff-btn" data-diff="Hard">Hard</button>
+      <button class="diff-btn" data-diff="Expert">Expert</button>
     </div>
   </div>
 
@@ -58,21 +67,31 @@
       const skinButtons = Array.from(document.querySelectorAll('.skin-swatch'));
       const playBtn = document.getElementById('play-btn');
       const cpuBtn = document.getElementById('cpu-btn');
-      let selected = 0;
-      function updateSelection(idx){ selected = idx; skinButtons.forEach(b=>b.classList.toggle('selected', Number(b.dataset.index)===idx)); window.__selectedSkin = idx; }
-      skinButtons.forEach(b=>b.addEventListener('click', ()=> updateSelection(Number(b.dataset.index))));
-      updateSelection(0);
-      // Play button: either call startGame from the gameplay script (if loaded), or mark _startRequested
+      const hotseatBtn = document.getElementById('hotseat-btn');
+      const diffBtns = Array.from(document.querySelectorAll('.diff-btn'));
+      let selectedSkin = (typeof window.__selectedSkin === 'number') ? window.__selectedSkin : 0;
+      let selectedDiff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium';
+      let mode = (typeof window.__mode === 'string') ? window.__mode : 'CPU';
+
+      function updateSkin(idx){ selectedSkin = idx; skinButtons.forEach(b=>b.classList.toggle('selected', Number(b.dataset.index)===idx)); window.__selectedSkin = idx; }
+      function updateDiff(diff){ selectedDiff = diff; diffBtns.forEach(b=>b.classList.toggle('selected', b.dataset.diff===diff)); cpuBtn.dataset.diff = diff; cpuBtn.textContent = 'CPU: ' + diff; window.__cpuDifficulty = diff; }
+      function setMode(m){ mode = m; window.__mode = m; hotseatBtn.classList.toggle('selected', m==='Hotseat'); cpuBtn.classList.toggle('selected', m==='CPU'); }
+
+      skinButtons.forEach(b=>b.addEventListener('click', ()=> updateSkin(Number(b.dataset.index))));
+      diffBtns.forEach(b=> b.addEventListener('click', ()=> updateDiff(b.dataset.diff)));
+      cpuBtn.addEventListener('click', ()=> setMode('CPU'));
+      hotseatBtn.addEventListener('click', ()=> setMode('Hotseat'));
+
+      updateSkin(selectedSkin); updateDiff(selectedDiff); setMode(mode);
+
       playBtn.addEventListener('click', ()=>{
-        window.__selectedSkin = selected;
-        window.__mode = 'CPU';
+        window.__selectedSkin = selectedSkin;
+        window.__cpuDifficulty = selectedDiff;
+        window.__mode = mode;
         startMenu.style.display = 'none';
         if (typeof window.startGame === 'function') window.startGame(); else window.__startRequested = true;
       });
-      cpuBtn.addEventListener('click', ()=>{
-        window.__mode = (window.__mode === 'CPU') ? 'Hotseat' : 'CPU';
-        cpuBtn.textContent = window.__mode === 'CPU' ? 'CPU Mode' : 'Hotseat Mode';
-      });
+
       // ensure menu stays visible over canvas
       startMenu.style.zIndex = 9999;
     })();
