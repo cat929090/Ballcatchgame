@@ -9,6 +9,15 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
+  <style>
+    /* Fallback visible message for devices where JS fails or script is blocked */
+    #fallback-debug {
+      position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:9999;
+      background:rgba(0,0,0,0.75); color:#fff; padding:18px 24px; border-radius:10px; font-weight:900;
+      font-size:18px; text-align:center; display:block;
+      box-shadow:0 8px 40px rgba(0,0,0,0.6);
+    }
+  </style>
 </head>
 <body>
   <div id="hud">
@@ -17,9 +26,17 @@
     <div id="instr">Hold/click/touch to charge, release to throw. Catch by tapping/clicking.</div>
     <div id="version" style="font-weight:900;opacity:0.95;margin-left:8px;color:#9be">v5</div>
   </div>
+
   <canvas id="game"></canvas>
 
+  <!-- JS fallback message: removed by the script if it runs. Visible otherwise. -->
+  <div id="fallback-debug">TEST VISUALS v6 — JavaScript not running or blocked</div>
+
   <!-- cache-bust query so phones pick up latest script after updates -->
-  <script src="script.js?v=5"></script>
+  <script src="script.js?v=6"></script>
+  <script>
+    // Remove fallback if script loaded and running
+    try { document.getElementById('fallback-debug').style.display = 'none'; } catch(e){}
+  </script>
 </body>
 </html>
