@@ -1,9 +1,9 @@
 /* gameplay + skins + start menu integration (v9)
    - True first-person 3D-ish throws using simple pinhole projection
-   - Taps/screen aim define the target area (project into world at chosen depth)
-   - Ball has x,y,z and vx,vy,vz; gravity applied to y; projection to 2D for rendering
+   - Taps/screen aim define the target area (left/right/up) on a forward plane
+   - Ball has world {x,y,z} and velocity {vx,vy,vz}; gravity applied to vy
    - Player is camera at world origin; opponent lives in world coords in front
-   - Pointer-lock aiming still supported; touch/absolute fallback supported
+   - Pointer-lock aiming supported; touch/absolute fallback supported
 */
 
 const canvas = document.getElementById('game');
@@ -87,37 +87,41 @@ function project(world){
 function spawnBall(fromIdx, speed, curve){
   const from = players[fromIdx]; if(!from) return;
   if (fromIdx === 0){
-    // compute target world point from current screen tap/aim
-    // choose a target plane distance based on charge / speed
-    const targetPlane = 900; // typical meters forward
-    const cx = W/2, cy = H/2;
-    // convert screen mouseAbs -> world coordinates at depth = targetPlane
+    // map screen tap (mouseAbs) to a world target on a forward plane
+    const cx = W / 2, cy = H / 2;
+    // choose target plane based on speed so stronger throws go farther
+    const targetPlane = Math.max(600, Math.min(2200, 900 + (speed - MIN_THROW_SPEED) * 0.6));
+
+    // screen -> camera-space point at depth = targetPlane (pinhole projection inverse)
     const sx = mouseAbs.x, sy = mouseAbs.y;
-    const wx = (sx - cx) * ((targetPlane + FOCAL) / FOCAL);
-    const wy = (cy - sy) * ((targetPlane + FOCAL) / FOCAL);
-    const wz = targetPlane;
+    const wx_cam = (sx - cx) * ((targetPlane + FOCAL) / FOCAL); // right positive
+    const wy_cam = (cy - sy) * ((targetPlane + FOCAL) / FOCAL); // up positive
+    const wz_cam = targetPlane;
 
-    // desired target relative to camera origin
-    const tx = wx, ty = wy, tz = wz;
+    // rotate camera-space (wx_cam, wz_cam) by current aimAngle into world coords
+    const ca = Math.cos(aimAngle), sa = Math.sin(aimAngle);
+    const tx = wx_cam * ca - wz_cam * sa; // world X (right)
+    const tz = wx_cam * sa + wz_cam * ca; // world Z (forward)
+    const ty = wy_cam;                       // world Y (up)
 
-    // choose time based on forward distance and speed
-    const forwardDist = tz;
-    const estForwardSpeed = Math.max(200, speed); // ensure non-zero
-    const t = Math.max(0.25, forwardDist / estForwardSpeed);
+    // start point slightly forward from camera so ball is visible immediately
+    const SPAWN_FORWARD = 30; // px forward from camera
+    const startX = SPAWN_FORWARD * sa;    // small offset in world X (based on yaw)
+    const startZ = SPAWN_FORWARD * ca;    // small offset in world Z
+    const startY = 0;
 
-    // initial velocities to reach target in time t with gravity
-    const vx = tx / t;
-    const vz = tz / t;
-    // vy must account for gravity: ty = vy*t - 0.5*g*t^2 => vy = (ty + 0.5*g*t^2)/t
+    // estimate time to reach forward target (based on forward distance and speed)
+    const forwardDist = Math.max(120, tz - startZ);
+    const estForwardSpeed = Math.max(300, speed);
+    const t = Math.max(0.18, forwardDist / estForwardSpeed);
+
+    // initial velocities to reach (tx,ty,tz) in time t (vy accounts for gravity)
+    const vx = (tx - startX) / t;
+    const vz = (tz - startZ) / t;
     const vy = (ty + 0.5 * GRAVITY * t * t) / t;
 
-    const startOffset = 24; // start slightly forward
-    const sxw = startOffset * Math.cos(aimAngle);
-    const szy = 0; // start at camera height 0
-    const szw = startOffset * Math.sin(aimAngle);
-    const startWorld = { x: sxw, y: szy, z: startOffset };
-
-    ball = { world:{ x: startWorld.x, y: startWorld.y, z: startWorld.z }, vx, vy, vz, r:BASE_BALL_RADIUS, owner:fromIdx, target:1-fromIdx, state:'outgoing', born:now() };
+    // create 3D ball (world coordinates)
+    ball = { world:{ x: startX, y: startY, z: startZ }, vx, vy, vz, r:BASE_BALL_RADIUS, owner:fromIdx, target:1-fromIdx, state:'outgoing', born:now() };
   } else {
     // opponent throw: aim roughly at player with some variation
     const target = players[0];
@@ -131,19 +135,17 @@ function spawnBall(fromIdx, speed, curve){
     const vz = (tz - from.world.z) / t;
     ball = { world:{ x: from.world.x, y: from.world.y, z: from.world.z }, vx, vy, vz, r:BASE_BALL_RADIUS, owner:fromIdx, target:1-fromIdx, state:'outgoing', born:now() };
   }
-  from.hasBall = false; hideCatchButton();
+  if (ball) { if (ball.owner === 0) players[0].hasBall = false; else players[1].hasBall = false; hideCatchButton(); }
 }
 
 // Input handlers (pointer-lock & fallback)
 canvas.addEventListener('mousemove', e=>{
   if (usingPointerLock){
     aimAngle += e.movementX * AIM_SENSITIVITY;
-    // keep angle normalized
     if (aimAngle > Math.PI*2) aimAngle -= Math.PI*2;
     if (aimAngle < -Math.PI*2) aimAngle += Math.PI*2;
   } else {
     const r = canvas.getBoundingClientRect(); mouseAbs.x = e.clientX - r.left; mouseAbs.y = e.clientY - r.top;
-    // compute aimAngle towards mouseAbs
     const dx = (mouseAbs.x - W/2), dy = (mouseAbs.y - H/2);
     aimAngle = Math.atan2(dy, dx);
   }
@@ -153,12 +155,11 @@ canvas.addEventListener('mousemove', e=>{
 canvas.addEventListener('mousedown', e=>{ if(!gameStarted||!players[0]||!players[0].hasBall) return; players[0].charging=true; players[0].chargeStart=now(); players[0].recentAims=[]; });
 canvas.addEventListener('mouseup', e=>{ if(!gameStarted||!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt = Math.min(MAX_CHARGE, now()-players[0].chargeStart); const t = dt / MAX_CHARGE; const speed = MIN_THROW_SPEED + t*(MAX_THROW_SPEED - MIN_THROW_SPEED); let curve=0; spawnBall(0, speed, curve); });
 
-// touch: set mouseAbs and use as aim on release
-canvas.addEventListener('touchstart', e=>{ if(!gameStarted) return; e.preventDefault(); const t = e.changedTouches[0]; touchActive=true; touchId=t.identifier; const r = canvas.getBoundingClientRect(); mouseAbs.x = t.clientX - r.left; mouseAbs.y = t.clientY - r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); if(players[0].hasBall){ players[0].charging=true; players[0].chargeStart=now(); } } }, {passive:false});
-canvas.addEventListener('touchmove', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ const r=canvas.getBoundingClientRect(); mouseAbs.x = t.clientX - r.left; mouseAbs.y = t.clientY - r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); } } } }, {passive:false});
+// touch handlers
+canvas.addEventListener('touchstart', e=>{ if(!gameStarted) return; e.preventDefault(); const t=e.changedTouches[0]; touchActive=true; touchId=t.identifier; const r=canvas.getBoundingClientRect(); mouseAbs.x=t.clientX-r.left; mouseAbs.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); if(players[0].hasBall){ players[0].charging=true; players[0].chargeStart=now(); } } }, {passive:false});
+canvas.addEventListener('touchmove', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ const r=canvas.getBoundingClientRect(); mouseAbs.x=t.clientX-r.left; mouseAbs.y=t.clientY-r.top; if(players[0]){ players[0].recentAims.push({x:mouseAbs.x,y:mouseAbs.y,t:now()}); if(players[0].recentAims.length>12) players[0].recentAims.shift(); } } } }, {passive:false});
 canvas.addEventListener('touchend', e=>{ if(!gameStarted) return; e.preventDefault(); for(const t of e.changedTouches){ if(t.identifier===touchId){ touchActive=false; touchId=null; if(!players[0]||!players[0].charging) return; players[0].charging=false; if(!players[0].hasBall) return; const dt = Math.min(MAX_CHARGE, now()-players[0].chargeStart); const tu = dt / MAX_CHARGE; const speed = MIN_THROW_SPEED + tu*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(0, speed, 0); } } }, {passive:false});
 
-// clicking to catch: check projected position near reticle
 canvas.addEventListener('click', e=>{ if(!gameStarted || !ball) return; if(ball.state!=='incoming') return; if(ball.target!==0) return; const proj = project(ball.world); if(!proj) return; const d = Math.hypot(proj.x - W/2, proj.y - H/2); if(d <= proj.r + 40 && proj.z > 50) catchBall(0); });
 
 // hotseat / AI adapted to world coords
@@ -166,10 +167,7 @@ function hotseatControls(dt){ const p = players[1]; if(!p) return; const speed =
 
 function aiUpdate(dt){ const ai = players[1]; if(!ai || ai.isHuman) return; const diff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium'; const diffMap = { 'Easy':0.6, 'Medium':1.0, 'Hard':1.3, 'Expert':1.6 }; const react = diffMap[diff] || 1.0; // move to preferable home
   const homeX = 220, homeZ = 900; ai.world.x += (homeX - ai.world.x) * Math.min(1, dt*0.6*react); ai.world.z += (homeZ - ai.world.z) * Math.min(1, dt*0.6*react); ai.world.x = Math.max(-W, Math.min(W, ai.world.x)); ai.world.z = Math.max(80, Math.min(5000, ai.world.z));
-  if(ball && ball.state==='incoming' && ball.target===1){ // move to intercept projected position
-    const proj = project(ball.world); if(proj){ const desiredX = (proj.x - W/2) * ( (ai.world.z + FOCAL) / FOCAL ); // approximate world lateral
-      const dx = desiredX - ai.world.x; const dz = (proj.z || ai.world.z) - ai.world.z; const dist = Math.hypot(dx, dz) || 1; const mv = 420 * react; ai.world.x += (dx/dist) * Math.min(mv*dt, Math.abs(dx)); ai.world.z += (dz/dist) * Math.min(mv*dt, Math.abs(dz)); if(Math.hypot(ball.world.x - ai.world.x, ball.world.y - ai.world.y, ball.world.z - ai.world.z) <= 60) catchBall(1); }
-  } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const speed = MIN_THROW_SPEED + Math.random()*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(1, speed * react, (Math.random()-0.5)*0.6); }, 300 + Math.random()*700); } }
+  if(ball && ball.state==='incoming' && ball.target===1){ const proj = project(ball.world); if(proj){ const desiredX = (proj.x - W/2) * ( (ai.world.z + FOCAL) / FOCAL ); const dx = desiredX - ai.world.x; const dz = (proj.z || ai.world.z) - ai.world.z; const dist = Math.hypot(dx, dz) || 1; const mv = 420 * react; ai.world.x += (dx/dist) * Math.min(mv*dt, Math.abs(dx)); ai.world.z += (dz/dist) * Math.min(mv*dt, Math.abs(dz)); if(Math.hypot(ball.world.x - ai.world.x, ball.world.y - ai.world.y, ball.world.z - ai.world.z) <= 60) catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const speed = MIN_THROW_SPEED + Math.random()*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(1, speed * react, (Math.random()-0.5)*0.6); }, 300 + Math.random()*700); } }
 }
 
 function catchBall(playerIdx){ players[playerIdx].hasBall = true; scores[playerIdx] += 1; updateScore(); ball = null; hideCatchButton(); }
@@ -178,22 +176,17 @@ function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} -
 function applyPhysics(dt){ if(!ball) return; // integrate velocities
   ball.world.x += ball.vx * dt; ball.world.z += ball.vz * dt; ball.world.y += ball.vy * dt; // gravity
   ball.vy -= GRAVITY * dt;
-  // simple ground collision: if ball below y = -40 (ground plane) treat as owner pickup or bounce
-  if(ball.world.y < -120){ // sank below ground: give to nearest player
-    // give to owner (counts as score)
-    players[ball.owner].hasBall = true; scores[ball.owner] += 1; updateScore(); ball = null; hideCatchButton(); }
+  // if ball goes below ground plane, assign score to nearest owner
+  if(ball.world.y < -120){ players[ball.owner].hasBall = true; scores[ball.owner] += 1; updateScore(); ball = null; hideCatchButton(); }
 }
 
 // drawing helpers
 function draw(){ ctx.clearRect(0,0,W,H);
   // opponent
-  const opp = players[1]; if(opp){ const proj = project(opp.world); if(proj){ // draw opponent as circle
-      ctx.beginPath(); ctx.fillStyle = opp.fill; ctx.arc(proj.x, proj.y, Math.max(6, proj.r*0.9), 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.strokeStyle='rgba(0,0,0,0.45)'; ctx.lineWidth=2; ctx.stroke(); if(opp.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(proj.x + proj.r*1.2, proj.y - proj.r*0.6, Math.max(6, proj.r*0.6), 0, Math.PI*2); ctx.fill(); } } }
+  const opp = players[1]; if(opp){ const proj = project(opp.world); if(proj){ ctx.beginPath(); ctx.fillStyle = opp.fill; ctx.arc(proj.x, proj.y, Math.max(6, proj.r*0.9), 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.strokeStyle='rgba(0,0,0,0.45)'; ctx.lineWidth=2; ctx.stroke(); if(opp.hasBall){ ctx.beginPath(); ctx.fillStyle=currentBallColor; ctx.arc(proj.x + proj.r*1.2, proj.y - proj.r*0.6, Math.max(6, proj.r*0.6), 0, Math.PI*2); ctx.fill(); } } }
 
   // ball
-  if(ball){ const proj = project(ball.world); if(proj){ // shadow
-      ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.36)'; ctx.ellipse(proj.x + 6, proj.y + Math.max(6, proj.r*0.6), proj.r*0.9, proj.r*0.45, 0, 0, Math.PI*2); ctx.fill(); // ball
-      ctx.fillStyle = currentBallColor; ctx.beginPath(); ctx.arc(proj.x, proj.y, proj.r, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.arc(proj.x - Math.max(3, proj.r*0.2), proj.y - Math.max(5, proj.r*0.2), proj.r*0.28, 0, Math.PI*2); ctx.fill(); } }
+  if(ball){ const proj = project(ball.world); if(proj){ ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.36)'; ctx.ellipse(proj.x + 6, proj.y + Math.max(6, proj.r*0.6), proj.r*0.9, proj.r*0.45, 0, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = currentBallColor; ctx.beginPath(); ctx.arc(proj.x, proj.y, proj.r, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.arc(proj.x - Math.max(3, proj.r*0.2), proj.y - Math.max(5, proj.r*0.2), proj.r*0.28, 0, Math.PI*2); ctx.fill(); } }
 
   // reticle
   const cx = W/2, cy = H/2; ctx.save(); ctx.beginPath(); ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=2; ctx.arc(cx, cy, 8, 0, Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.fillStyle='rgba(255,255,255,0.92)'; ctx.arc(cx, cy, 2, 0, Math.PI*2); ctx.fill(); ctx.restore();
@@ -208,13 +201,27 @@ function loop(){ const t = now(); const dt = Math.min(40, t - lastFrame) / 1000;
   players[0].world.x = 0; players[0].world.y = 0; players[0].world.z = 0;
   if(mode==='Hotseat') hotseatControls(dt); if(mode==='CPU') aiUpdate(dt);
   if(ball){ applyPhysics(dt);
-    // check for incoming-to-player catch: project and see if near center and depth reasonable
-    if(ball.state === 'outgoing'){ // when z passes beyond target plane, switch to incoming state to let target home
-      // if owner threw, we let incoming be determined when ball's forward velocity reverses or other logic
-      // For simplicity: mark incoming when ball's vz changes sign relative to target
+    // check for catch: when ball z <= some near value, consider catching by player
+    if(ball.world.z <= 60 && ball.state !== 'incoming'){
+      ball.state = 'incoming'; ball.target = (ball.owner === 1) ? 1 : 0; if(ball.target === 0 && isTouchDevice()) showCatchButton();
     }
+    // when very close to camera plane, decide catch/miss
+    if(ball.world.z <= 12){ const proj = project(ball.world); if(proj){ const d = Math.hypot(proj.x - W/2, proj.y - H/2); if(ball.target === 0 && d <= proj.r + 40){ catchBall(0); } else if(ball.target === 1){ const opp = players[1]; const oppProj = project(opp.world); if(oppProj && Math.hypot(proj.x - oppProj.x, proj.y - oppProj.y) <= proj.r + 30){ catchBall(1); } else { players[1].hasBall = true; ball = null; hideCatchButton(); } } else { // missed by player
+        players[1].hasBall = true; ball = null; hideCatchButton(); } } }
+    // cutoff
+    if(ball && Math.abs(ball.world.z) > 8000){ ball = null; hideCatchButton(); }
   }
   draw(); if(!gameOver) requestAnimationFrame(loop);
+}
+
+function updateScore(){ if(scoreEl) scoreEl.textContent = `Score: ${scores[0]} - ${scores[1]}`; }
+
+// existing helper functions (hotseatControls, aiUpdate) remain; ensure they reference world coords properly
+function hotseatControls(dt){ const p = players[1]; if(!p) return; const speed = 420; if(keys['KeyW']) p.world.z -= speed*dt; if(keys['KeyS']) p.world.z += speed*dt; if(keys['KeyA']) p.world.x -= speed*dt; if(keys['KeyD']) p.world.x += speed*dt; p.world.x = Math.max(-W, Math.min(W, p.world.x)); p.world.z = Math.max(50, Math.min(5000, p.world.z)); if(keys['Space'] && ball && ball.state==='incoming' && ball.target===1){ const proj = project(ball.world); const oppProj = project(p.world); if(proj && oppProj && Math.hypot(proj.x - oppProj.x, proj.y - oppProj.y) <= proj.r + 30) catchBall(1); } }
+
+function aiUpdate(dt){ const ai = players[1]; if(!ai || ai.isHuman) return; const diff = (typeof window.__cpuDifficulty === 'string') ? window.__cpuDifficulty : 'Medium'; const diffMap = { 'Easy':0.6, 'Medium':1.0, 'Hard':1.3, 'Expert':1.6 }; const react = diffMap[diff] || 1.0; // move to preferable home
+  const homeX = 220, homeZ = 900; ai.world.x += (homeX - ai.world.x) * Math.min(1, dt*0.6*react); ai.world.z += (homeZ - ai.world.z) * Math.min(1, dt*0.6*react); ai.world.x = Math.max(-W, Math.min(W, ai.world.x)); ai.world.z = Math.max(80, Math.min(5000, ai.world.z));
+  if(ball && ball.state==='incoming' && ball.target===1){ const proj = project(ball.world); if(proj){ const desiredX = (proj.x - W/2) * ( (ai.world.z + FOCAL) / FOCAL ); const dx = desiredX - ai.world.x; const dz = (proj.z || ai.world.z) - ai.world.z; const dist = Math.hypot(dx, dz) || 1; const mv = 420 * react; ai.world.x += (dx/dist) * Math.min(mv*dt, Math.abs(dx)); ai.world.z += (dz/dist) * Math.min(mv*dt, Math.abs(dz)); if(Math.hypot(ball.world.x - ai.world.x, ball.world.y - ai.world.y, ball.world.z - ai.world.z) <= 60) catchBall(1); } } else if(ai.hasBall){ if(now() > ai.aiState.nextActionAt){ ai.aiState.nextActionAt = now() + 1000/Math.max(0.6,react) + Math.random()*800; setTimeout(()=>{ if(!ai.hasBall) return; const speed = MIN_THROW_SPEED + Math.random()*(MAX_THROW_SPEED - MIN_THROW_SPEED); spawnBall(1, speed * react, (Math.random()-0.5)*0.6); }, 300 + Math.random()*700); } }
 }
 
 // init
