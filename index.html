@@ -11,9 +11,11 @@
     <div id="score">Score: 0</div>
     <div id="lives"></div>
     <div id="instr">Hold/click/touch to charge, release to throw. Catch by tapping/clicking.</div>
+    <div id="version" style="font-weight:800;opacity:0.9;margin-left:8px">v4</div>
   </div>
   <canvas id="game"></canvas>
 
-  <script src="script.js"></script>
+  <!-- cache-bust query so phones pick up latest script after updates -->
+  <script src="script.js?v=4"></script>
 </body>
 </html>
