@@ -19,7 +19,7 @@
 
   <canvas id="game" aria-label="game canvas"></canvas>
 
-  <!-- Start menu overlay -->
+  <!-- Start menu overlay (visible by default) -->
   <div id="start-menu" role="dialog" aria-modal="true">
     <h1>Ball Catch</h1>
     <p class="muted">Choose a skin and press Play</p>
@@ -50,6 +50,33 @@
       <button id="cpu-btn" class="secondary">CPU Mode</button>
     </div>
   </div>
+
+  <!-- Inline lightweight menu wiring so menu appears and works even if external script errors -->
+  <script>
+    (function(){
+      const startMenu = document.getElementById('start-menu');
+      const skinButtons = Array.from(document.querySelectorAll('.skin-swatch'));
+      const playBtn = document.getElementById('play-btn');
+      const cpuBtn = document.getElementById('cpu-btn');
+      let selected = 0;
+      function updateSelection(idx){ selected = idx; skinButtons.forEach(b=>b.classList.toggle('selected', Number(b.dataset.index)===idx)); window.__selectedSkin = idx; }
+      skinButtons.forEach(b=>b.addEventListener('click', ()=> updateSelection(Number(b.dataset.index))));
+      updateSelection(0);
+      // Play button: either call startGame from the gameplay script (if loaded), or mark _startRequested
+      playBtn.addEventListener('click', ()=>{
+        window.__selectedSkin = selected;
+        window.__mode = 'CPU';
+        startMenu.style.display = 'none';
+        if (typeof window.startGame === 'function') window.startGame(); else window.__startRequested = true;
+      });
+      cpuBtn.addEventListener('click', ()=>{
+        window.__mode = (window.__mode === 'CPU') ? 'Hotseat' : 'CPU';
+        cpuBtn.textContent = window.__mode === 'CPU' ? 'CPU Mode' : 'Hotseat Mode';
+      });
+      // ensure menu stays visible over canvas
+      startMenu.style.zIndex = 9999;
+    })();
+  </script>
 
   <script src="script.js?v=8"></script>
 </body>
