@@ -5,38 +5,52 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Cursor Throw & Catch</title>
   <link rel="stylesheet" href="style.css" />
-  <!-- Prevent aggressive proxies from caching (helpful on mobile) -->
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <style>
-    /* Fallback visible message for devices where JS fails or script is blocked */
-    #fallback-debug {
-      position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:9999;
-      background:rgba(0,0,0,0.75); color:#fff; padding:18px 24px; border-radius:10px; font-weight:900;
-      font-size:18px; text-align:center; display:block;
-      box-shadow:0 8px 40px rgba(0,0,0,0.6);
-    }
-  </style>
 </head>
 <body>
   <div id="hud">
     <div id="score">Score: 0</div>
     <div id="lives"></div>
     <div id="instr">Hold/click/touch to charge, release to throw. Catch by tapping/clicking.</div>
-    <div id="version" style="font-weight:900;opacity:0.95;margin-left:8px;color:#9be">v5</div>
+    <div id="version" style="font-weight:900;opacity:0.95;margin-left:8px;color:#9be">v8</div>
   </div>
 
-  <canvas id="game"></canvas>
+  <canvas id="game" aria-label="game canvas"></canvas>
 
-  <!-- JS fallback message: removed by the script if it runs. Visible otherwise. -->
-  <div id="fallback-debug">TEST VISUALS v6 — JavaScript not running or blocked</div>
+  <!-- Start menu overlay -->
+  <div id="start-menu" role="dialog" aria-modal="true">
+    <h1>Ball Catch</h1>
+    <p class="muted">Choose a skin and press Play</p>
+    <div id="skins" class="skins">
+      <button class="skin-swatch" data-index="0" aria-label="Classic skin">
+        <div class="swatch cursor" style="background:#ffffff"></div>
+        <div class="swatch ball" style="background:#ff2b2b"></div>
+        <div class="label">Classic</div>
+      </button>
+      <button class="skin-swatch" data-index="1" aria-label="Neon skin">
+        <div class="swatch cursor" style="background:#8cf6ff"></div>
+        <div class="swatch ball" style="background:#ff6ad5"></div>
+        <div class="label">Neon</div>
+      </button>
+      <button class="skin-swatch" data-index="2" aria-label="Lime skin">
+        <div class="swatch cursor" style="background:#b8ff6a"></div>
+        <div class="swatch ball" style="background:#ffb86a"></div>
+        <div class="label">Lime</div>
+      </button>
+      <button class="skin-swatch" data-index="3" aria-label="Gold skin">
+        <div class="swatch cursor" style="background:#ffd36a"></div>
+        <div class="swatch ball" style="background:#9b6aff"></div>
+        <div class="label">Gold</div>
+      </button>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:10px;justify-content:center;">
+      <button id="play-btn" class="primary">Play</button>
+      <button id="cpu-btn" class="secondary">CPU Mode</button>
+    </div>
+  </div>
 
-  <!-- cache-bust query so phones pick up latest script after updates -->
-  <script src="script.js?v=6"></script>
-  <script>
-    // Remove fallback if script loaded and running
-    try { document.getElementById('fallback-debug').style.display = 'none'; } catch(e){}
-  </script>
+  <script src="script.js?v=8"></script>
 </body>
 </html>

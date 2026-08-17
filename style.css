@@ -40,5 +40,27 @@ button#restart{margin-top:10px; padding:8px 12px; border-radius:8px; background:
 .info-panel{position:fixed; right:12px; top:12px; z-index:10; background:var(--panel); padding:8px 12px; border-radius:10px; font-size:13px}
 .instructions{max-width:320px}
 
-/* improve mobile catch button touch behavior */
-#catch-btn { touch-action: manipulation; -webkit-tap-highlight-color: rgba(0,0,0,0); }
+/* make the catch button more visible on mobile */
+#catch-btn { touch-action: manipulation; }
+
+/* Start menu styles */
+#start-menu{
+  position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:40;
+  background:rgba(0,0,0,0.6); color:var(--text); padding:18px; border-radius:12px; text-align:center;
+  width: min(420px, 92vw); box-shadow: 0 12px 40px rgba(2,6,23,0.6);
+}
+#start-menu h1{margin:0 0 6px 0; font-size:22px}
+#start-menu .muted{opacity:0.9; color:#cde6ff; margin-bottom:12px}
+.skins{display:flex; gap:10px; justify-content:center; flex-wrap:wrap}
+.skin-swatch{background:transparent; border:1px solid rgba(255,255,255,0.06); padding:8px; border-radius:8px; min-width:72px; display:flex; flex-direction:column; gap:8px; align-items:center; cursor:pointer}
+.skin-swatch .swatch{width:28px; height:28px; border-radius:6px; box-shadow: 0 6px 18px rgba(2,6,23,0.45)}
+.skin-swatch .ball{width:22px; height:22px; border-radius:50%;}
+.skin-swatch .label{font-size:12px; opacity:0.95}
+.skin-swatch.selected{outline:3px solid rgba(140,246,255,0.12);}
+#start-menu .primary{background:var(--accent); color:#012; border:0; padding:10px 16px; border-radius:8px; font-weight:800}
+#start-menu .secondary{background:transparent; color:var(--text); border:1px solid rgba(255,255,255,0.06); padding:8px 12px; border-radius:8px}
+
+@media (max-width:520px){
+  #start-menu{padding:14px}
+  .skin-swatch{min-width:60px}
+}
